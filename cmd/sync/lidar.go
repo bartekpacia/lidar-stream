@@ -4,22 +4,18 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"os"
-	"os/exec"
-	"runtime"
 	"time"
 )
 
 // Lidar-related constants.
 const (
-	lidarMaxDataSize = 8192
+	lidarMaxDataSize = 8192 // defined by RPLIDAR hardware
 
 	// Lidar scanning modes.
 	rplidarModeBoost       = 2
-	rplidarModeSensitivity = 3
-	rplidarModeStability   = 4
+	rplidarModeSensitivity = 3 // best for indoor applications
+	rplidarModeStability   = 4 // best for very sunny days (like "Dni Knurowa 2021")
 	rplidarModeDefault     = rplidarModeSensitivity
 )
 
@@ -42,72 +38,14 @@ type LidarCloud struct {
 
 // Lidar represents general lidar parameters.
 type Lidar struct {
-	TimeInit           time.Time     // Time of the first starting line read (line starting with '!').
-	RPM                int           // Declared RPM (actual may differ).
-	Mode               int           // rplidar scan mode.
-	Args               []string      // lidar-scan process argv.
-	Path               string        // Path to lidar-scan executable.
-	Stdout             io.ReadCloser // lidar-scan stdout.
-	Stderr             io.ReadCloser // lidar-scan stderr.
-	process            *exec.Cmd     // lidar-scan process.
-	running            bool          // Whether lidar-scan is currently scanning.
+	TimeInit           time.Time // Time of the first starting line read (line starting with '!').
+	RPM                int       // Declared RPM (actual may differ).
+	Mode               int       // rplidar scan mode.
+	Process            Process   // lidar-scan process.
+	running            bool      // Whether lidar-scan is currently scanning.
 	nextCloudCount     int
 	nextCloudTimeDiff  int
 	nextCloudTimeBegin time.Time
-}
-
-// StartProcess starts the lidar-scan process.
-// It does not check whether it has been already started.
-func (lidar *Lidar) StartProcess() error {
-	lidar.process = exec.Command(lidar.Path, lidar.Args...)
-	log.Println("starting lidar-scan process with args:", lidar.Args)
-
-	var err error
-	lidar.Stdout, err = lidar.process.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("get stdout of lidar-scan process: %v", err)
-	}
-	lidar.process.Stderr = os.Stderr
-	lidar.Stderr = os.Stderr
-
-	err = lidar.process.Start()
-	if err != nil {
-		return fmt.Errorf("start lidar-scan process: %v", err)
-	}
-
-	lidar.running = true
-	return nil
-}
-
-// CloseProcess sends SIGINT (ctrl+c) to the lidar-scan process.
-// It is important because lidar-scan performs cleanup on SIGINT.
-// It does not check whether it has been already started.
-//
-// Does not work on Windows - instead, it just calls KillProcess.
-func (lidar *Lidar) CloseProcess() (err error) {
-	if runtime.GOOS == "windows" {
-		log.Println("closing is not implemented on Windows, killing instead")
-		return lidar.KillProcess()
-	}
-
-	log.Println("closing lidar-scan process")
-	if err = lidar.process.Process.Signal(os.Interrupt); err != nil {
-		return fmt.Errorf("send SIGINT to lidar-scan: %v", err)
-	}
-	lidar.running = false
-	return nil
-}
-
-// KillProcess kills the lidar-scan process immediately, so the cleanup will not be performed.
-//
-// Use it only in emergency situations. Prefer CloseProcess.
-func (lidar *Lidar) KillProcess() (err error) {
-	log.Println("killing lidar-scan process")
-	if err = lidar.process.Process.Kill(); err != nil {
-		return fmt.Errorf("kill lidar-scan: %v", err)
-	}
-	lidar.running = false
-	return nil
 }
 
 // StartLoop starts the lidar-scan process and runs a loop responsible for reading and
@@ -116,11 +54,11 @@ func (lidar *Lidar) KillProcess() (err error) {
 // point cloud. The pointers approach is required because LidarCloud is greather than 64kB
 // which is a Go limit.
 func (lidar *Lidar) StartLoop(channel chan *LidarCloud) (err error) {
-	if err := lidar.StartProcess(); err != nil {
+	if err := lidar.Process.StartProcess(); err != nil {
 		return fmt.Errorf("start process: %v", err)
 	}
 
-	scanner := bufio.NewScanner(lidar.Stdout)
+	scanner := bufio.NewScanner(lidar.Process.Stdout)
 	scanner.Split(bufio.ScanLines)
 	for {
 		// create new cloud every time to pass the pointer via channel and avoid data race
@@ -174,26 +112,6 @@ func (lidar *Lidar) ProcessLine(line string, cloud *LidarCloud) (err error) {
 			return errors.New("data buffer overflow")
 		}
 		cloud.Data[cloud.Size] = Point{angle, dist}
-	}
-	return nil
-}
-
-// UpdateProcessArgs modifies the parametres passed to lidar-scan to change its behavior.
-//
-// In practice, there is no way to modify the command-line arguments passed to lidar-scan
-// while it is running, so this function simply kills the process and starts it again
-// with updated args.
-// Such a solution should be sufficient for most cases.
-func (lidar *Lidar) UpdateProcessArgs(args []string) (err error) {
-	log.Println("changing lidar-scan process args")
-	if err := lidar.CloseProcess(); err != nil {
-		return err
-	}
-
-	lidar.Args = args
-
-	if err := lidar.StartProcess(); err != nil {
-		return err
 	}
 	return nil
 }

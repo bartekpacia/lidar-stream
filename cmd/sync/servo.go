@@ -9,18 +9,21 @@ import (
 	"github.com/knei-knurow/frames"
 )
 
+// Servo constants
 const (
 	servoMinPos    = 1000
 	servoStartPos  = 2500
 	servoMaxPos    = 3000
-	servoUnitToDeg = 0.1 // 1 servo position unit = servoUnitToDeg * 1deg
+	servoUnitToDeg = 0.1 // 1 servo position unit = servoUnitToDeg * deg
 )
 
+// ServoData is a struct containing information about servo state
 type ServoData struct {
 	positon uint16    // given, not real
 	timept  time.Time // time of sending a new position to the servo
 }
 
+// Servo is the main servo control struct
 type Servo struct {
 	data       ServoData // servo data
 	positonMax uint16    // max position
@@ -44,9 +47,10 @@ func (servo *Servo) Move() {
 	}
 }
 
+// SendData is a low-level function to create a data frame and send it via serial port
 func (servo *Servo) SendData() (err error) {
 	inputByte := servo.data.positon
-	data := []byte{byte(inputByte >> 8), byte(inputByte)} // TODO: Check whether correct
+	data := []byte{byte(inputByte >> 8), byte(inputByte)}
 	f := frames.Create([2]byte{'L', 'D'}, data)
 	for i, currentByte := range f {
 		if _, err := servo.port.Write([]byte{currentByte}); err != nil {
